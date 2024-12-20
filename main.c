@@ -29,15 +29,13 @@ enum {
     Y
 };
 
-int parse_csv_line(char *s, int *arr, int len);
+int parse_csv_line(char *s, int *arr, int len, char delim);
 int count_char(const char *s, char ch);
+void fltr_lf_cr(char *s);
+bool calc_sigma(FILE *fl, struct sigma *sgm);
 
 int main(int argc, char **argv)
-{
-    char line[LINEMAX];
-    size_t line_len;
-    int *vec, vec_sz, cnt;
-    unsigned line_cnt = 0;
+{   
     struct sigma sgm = {0};
     struct line ln;
     
@@ -45,68 +43,111 @@ int main(int argc, char **argv)
         printf("usage: %s filename\n", argv[0]);
         exit(0);
     }
-    
-    vec_sz = ARR_SZ;
-    vec = malloc(ARR_SZ * sizeof(int));
-    if (!vec) {
-        perror(NULL);
-        exit(1);
-    }
 
     FILE *fl = fopen(argv[1], "r");
     if (!fl) {
         perror(argv[1]);
         exit(1);
     }
-    
-    while (fgets(line, LINEMAX, fl) != NULL) {        
-        line_cnt++;
-        line_len = strlen(line);
-        if (line[line_len - 1] == '\n') {
-            line[line_len - 1] = '\0';
-            line_len--;
-        }
-        
-        cnt = count_char(line, ',');
-        if (cnt > vec_sz) {
-            free(vec);
-            vec = malloc(cnt * sizeof(int));
-            if (!vec) {
-                perror(NULL);
-                exit(1);
-            }
-        }
-
-        cnt = parse_csv_line(line, vec, vec_sz);
-        if (cnt < 0) {
-            fprintf(stderr, "parsing end in %u row %d col\n",
-                    line_cnt - 1, -cnt);
-            exit(1);
-        }
-        sgm.x += vec[X];
-        sgm.y += vec[Y];
-        sgm.xy += vec[X] * vec[Y];
-        sgm.x2 += vec[X] * vec[X];
-        
-    }
 
     // printf("%u %d %d %d %d\n", line_cnt, sgm.x, sgm.y, sgm.x2, sgm.xy);
-
-    double a = (line_cnt * sgm.xy - sgm.x * sgm.y);
-    double b = (line_cnt * sgm.x2 - sgm.x * sgm.x);
-    ln.slope =  a / b ;
-    ln.intercept = (sgm.y - ln.slope * sgm.x) / line_cnt;
-
-    printf("m = %.3f b = %.3f\n", ln.slope, ln.intercept);
     
-    /* deallocation */
+    if (calc_sigma(fl, &sgm)) {
+        double a = (line_cnt * sgm.xy - sgm.x * sgm.y);
+        double b = (line_cnt * sgm.x2 - sgm.x * sgm.x);
+        ln.slope =  a / b ;
+        ln.intercept = (sgm.y - ln.slope * sgm.x) / line_cnt;
+        printf("m = %.3f b = %.3f\n", ln.slope, ln.intercept);    
+    }
+
+    
     fclose(fl);
-    free(vec);
 
     return 0;
 }
 
-int parse_csv_line(char *s, int *arr, int len)
+struct intbuf {
+    int *p;
+    size_t sz;
+};
+
+void intbuf_alloc(struct intbuf *ib, size_t sz)
+{
+    assert(ib);
+    
+    if (ib->p)
+        free(ib->p);
+
+    ib->p = malloc(sz * sizeof(int));
+    if (!ib->p) {
+        perror(NULL);
+        exit(1);
+    }
+    ib->sz = sz;
+}
+
+void intbuf_free(struct intbuf *ib)
+{
+    assert(ib);
+
+    if (ib->p) {
+        free(ib->p);
+        ib->sz = 0;
+    }
+}
+
+bool calc_sigma(FILE *fl, struct sigma *sgm)
+{
+    char line[LINEMAX];
+    unsigned line_cnt = 0;
+    int cnt, vec[2], ret = true;
+        
+    assert(fl && sgm);
+
+    intbuf_alloc(&vec, VEC_SZ);
+    
+    while (fgets(line, LINEMAX, fl)) {
+        fltr_lf_cr(line);
+                
+        cnt = count_char(line, ',');
+        if (cnt != sizeof(vec)) {
+            frintf(stderr, "too few columns in %u row\n", line_cnt);
+            ret = false;
+            break;
+        }
+
+        cnt = parse_csv_line(line, &vec.p, vec.sz, ',');
+        if (cnt < 0) {
+            fprintf(stderr, "parsing end in %u row %d col\n", line_cnt, -cnt);
+            ret = false;
+            break;
+        }
+        
+        sgm->x += vec[X];
+        sgm->y += vec[Y];
+        sgm->xy += vec[X] * vec[Y];
+        sgm->x2 += vec[X] * vec[X];
+
+        line_cnt++;
+    }
+
+    return ret;
+}
+
+void fltr_lf_cr(char *s)
+{
+    const char fltr[] = "\n\r";
+
+    assert(s);
+    
+    for (const char *p = fltr; *p; p++) {
+        char *ch = strrchr(s, *p);
+        if (ch)
+            *ch = '\0';
+    }
+}
+
+int parse_csv_line(char *s, int *arr, int len, char delim)
 {
     char *tok, *p, *end;
     int ii = 0;
